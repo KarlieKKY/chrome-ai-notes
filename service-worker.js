@@ -5,18 +5,47 @@ let timer = null;
 // Helper function to summarize content
 async function summarizeContent(text) {
   try {
-    const availability = await Summarizer.availability();
+    const summarizerAvailability = await Summarizer.availability();
+    const languageModelAvailability = await LanguageModel.availability();
+
+    if (summarizerAvailability === "unavailable") {
+      // The Summarizer API isn't usable.
+      return;
+    }
+
     const tldr_medium_summarizer = await Summarizer.create({
       sharedContext: "This is the content of a website",
       type: "tldr",
       length: "medium",
     });
-    if (availability === "unavailable") {
-      // The Summarizer API isn't usable.
-      return;
-    }
+
+    const params = await LanguageModel.params();
+    const languageModelSession = await LanguageModel.create({
+      temperature: 0,
+      topK: params.defaultTopK,
+    });
+
     const summary = await tldr_medium_summarizer.summarize(text);
-    return summary;
+    const prompt = await languageModelSession.prompt([
+      {
+        role: "user",
+        content:
+          "The following text delimited by triple backticks is a summary of a website: ```" +
+          summary +
+          "``` Your task is to classify the website into the most matching category from one in the list below:\n\n" +
+          "/Entertainment\n" +
+          "/Gaming\n" +
+          "/Adult\n" +
+          "/Education\n" +
+          "/Coffee\n\n" +
+          "Return ONLY the matching category itself",
+      },
+    ]);
+
+    return {
+      summary: summary,
+      category: prompt,
+    };
   } catch (error) {
     console.error("Error during summarization:", error);
     return null;
@@ -155,11 +184,11 @@ function resetTimer(url, tabId) {
       const pageData = await extractContentForLLM(tabId);
       if (pageData) {
         const stringifyObj = JSON.stringify(pageData);
-        const summary = await summarizeContent(stringifyObj);
+        const result = await summarizeContent(stringifyObj);
 
         // Add summary to page data
-        pageData.ai_summary = summary || "";
-
+        pageData.ai_summary = result.summary || "";
+        pageData.ai_tag_category = result.category || "";
         addToList(pageData);
       } else {
         console.log("Failed to extract page data, skipping...");
@@ -179,6 +208,7 @@ function addToList(pageData) {
       console.log("Added to list:", pageData.url);
       console.log("Page title:", pageData.title);
       console.log("AI Summary:", pageData.ai_summary);
+      console.log("AI Category:", pageData.ai_tag_category);
     });
   });
 }
