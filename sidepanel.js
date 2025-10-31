@@ -1,4 +1,4 @@
-import getYesterdayAt3AM from "./utils/utils.js";
+import getStartTime from "./utils/utils.js";
 
 // const availability = await Summarizer.availability();
 // console.log("Summarizer availability:", availability);
@@ -30,7 +30,7 @@ import getYesterdayAt3AM from "./utils/utils.js";
 //   }
 // );
 
-const startTime = getYesterdayAt3AM();
+const startTime = getStartTime();
 
 // chrome.history.search(
 //   { text: "", startTime: startTime, endTime: Date.now(), maxResults: 10000 },
