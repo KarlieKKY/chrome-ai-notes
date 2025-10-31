@@ -2,35 +2,14 @@ import getStartTime from "./utils/utils.js";
 
 const startTime = getStartTime();
 
-let currentTab = null;
-let timer = null;
-let urlList = JSON.parse(localStorage.getItem("urlList") || "[]");
+let urlList = [];
 
-function resetTimer(url) {
-  clearTimer();
-  timer = setTimeout(() => {
-    addToList(url);
-  }, 3000);
-}
-
-function clearTimer() {
-  if (timer) {
-    clearTimeout(timer);
-    timer = null;
-  }
-}
-
-function updateURL() {
+function updateCurrentURL() {
   chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
     if (tabs.length > 0) {
-      currentTab = tabs[0];
-      console.log("Current tab:", currentTab);
-      document.getElementById("url").textContent = currentTab.url;
-      resetTimer(currentTab.url);
+      document.getElementById("url").textContent = tabs[0].url;
     } else {
-      console.log("No active tab found.");
       document.getElementById("url").textContent = "No active tab found.";
-      clearTimer();
     }
   });
 }
@@ -62,19 +41,19 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
   }
 });
 
-updateURL();
-loadList();
-
 chrome.tabs.onActivated.addListener(() => {
-  updateURL();
+  updateCurrentURL();
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.url) {
     chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
       if (tabs.length > 0 && tabs[0].id === tabId) {
-        updateURL();
+        updateCurrentURL();
       }
     });
   }
 });
+
+updateCurrentURL();
+loadList();
