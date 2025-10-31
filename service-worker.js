@@ -2,8 +2,8 @@ let currentUrl = null;
 let currentTabId = null;
 let timer = null;
 
-// Helper function to extract website info
-async function extractWebsiteInfo(tabId) {
+// Helper function to extract website info for LLM processing
+async function extractContentForLLM(tabId) {
   try {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId },
@@ -16,41 +16,56 @@ async function extractWebsiteInfo(tabId) {
           return el ? el.content.trim() : null;
         };
 
-        // Helper: get JSON-LD structured data
-        const getJSONLD = () => {
-          const scripts = [
-            ...document.querySelectorAll('script[type="application/ld+json"]'),
-          ];
-          const data = [];
-          for (const s of scripts) {
-            try {
-              const parsed = JSON.parse(s.textContent.trim());
-              if (Array.isArray(parsed)) data.push(...parsed);
-              else data.push(parsed);
-            } catch (_) {}
-          }
-          return data;
-        };
-
-        // Helper: naive main text extraction
-        const getMainText = () => {
-          const article =
-            document.querySelector("article") ||
+        // Extract clean main content text
+        const extractMainContent = () => {
+          // Try to find main content container
+          let mainContent =
             document.querySelector("main") ||
+            document.querySelector("article") ||
+            document.querySelector('[role="main"]') ||
             document.body;
-          const clone = article.cloneNode(true);
-          // remove scripts, styles, nav, footer, etc.
-          clone
-            .querySelectorAll(
-              "script, style, nav, footer, header, form, aside, noscript"
-            )
-            .forEach((el) => el.remove());
-          let text = clone.innerText.replace(/\s+/g, " ").trim();
-          // limit overly long texts
-          return text.slice(0, 25000);
+
+          // Clone to avoid modifying the actual page
+          const clone = mainContent.cloneNode(true);
+
+          // Remove unwanted elements
+          const unwantedSelectors = [
+            "script",
+            "style",
+            "nav",
+            "header",
+            "footer",
+            "aside",
+            "iframe",
+            "noscript",
+            "form",
+            ".ad",
+            ".advertisement",
+            ".social-share",
+            ".comments",
+            '[role="navigation"]',
+            '[role="banner"]',
+            '[role="complementary"]',
+          ];
+
+          unwantedSelectors.forEach((selector) => {
+            clone.querySelectorAll(selector).forEach((el) => el.remove());
+          });
+
+          // Extract text content
+          let text = clone.innerText || clone.textContent;
+
+          // Clean up whitespace
+          text = text
+            .replace(/\s+/g, " ")
+            .replace(/\n\s*\n/g, "\n")
+            .trim();
+
+          // Limit to reasonable size (adjust as needed)
+          return text.slice(0, 50000);
         };
 
-        // Construct JSON
+        // Construct data object
         const data = {
           url: location.href,
           canonical_url:
@@ -59,23 +74,24 @@ async function extractWebsiteInfo(tabId) {
           fetched_at: new Date().toISOString(),
           site_name: getMeta("og:site_name") || location.hostname,
           title: document.title || getMeta("og:title"),
-          meta: {
-            description: getMeta("description"),
-            og_title: getMeta("og:title"),
-            og_description: getMeta("og:description"),
-            author: getMeta("author"),
-            published_time:
-              getMeta("article:published_time") || getMeta("og:pubdate"),
-            lang: document.documentElement.lang || navigator.language,
-          },
-          structured_data: getJSONLD(),
+          description: getMeta("description") || getMeta("og:description"),
+          author: getMeta("author"),
+          published_time:
+            getMeta("article:published_time") || getMeta("og:pubdate"),
+          lang: document.documentElement.lang || navigator.language,
+
+          // Main content for LLM
+          main_content: extractMainContent(),
+
+          // Additional context (useful for classification/retrieval)
           headings: [...document.querySelectorAll("h1, h2, h3")].map((h) => ({
             level: Number(h.tagName[1]),
             text: h.textContent.trim(),
           })),
-          main_text: getMainText(),
-          media_alts: [...document.querySelectorAll("img[alt]")]
-            .slice(0, 10)
+
+          // Optional: keep first few image alts for context
+          image_alts: [...document.querySelectorAll("img[alt]")]
+            .slice(0, 5)
             .map((img) => img.alt.trim())
             .filter(Boolean),
         };
@@ -85,7 +101,7 @@ async function extractWebsiteInfo(tabId) {
     });
     return result;
   } catch (error) {
-    console.error("Error extracting website info:", error);
+    console.error("Error extracting content:", error);
     return null;
   }
 }
@@ -115,7 +131,7 @@ function resetTimer(url, tabId) {
   // Start new 3-second timer
   if (url && tabId) {
     timer = setTimeout(async () => {
-      const pageData = await extractWebsiteInfo(tabId);
+      const pageData = await extractContentForLLM(tabId);
       if (pageData) {
         addToList(pageData);
       } else {
