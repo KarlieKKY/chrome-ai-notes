@@ -9,8 +9,16 @@
   "action": {
     "default_title": "Click to open panel"
   },
-  "permissions": ["sidePanel", "tabs", "tabGroups", "history"],
+  "permissions": ["sidePanel", "storage", "history", "tabs"],
+  "host_permissions": ["<all_urls>"],
   "side_panel": {
     "default_path": "sidepanel.html"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["sidepanel.js"],
+      "run_at": "document_idle"
+    }
+  ]
 }
