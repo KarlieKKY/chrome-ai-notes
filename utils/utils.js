@@ -1,4 +1,4 @@
-export default function getStartTime() {
+export function getStartTime() {
   const now = new Date();
   const currentHour = now.getHours();
 

@@ -1,4 +1,4 @@
-import getStartTime from "./utils/utils.js";
+import { getStartTime } from "./utils/utils.js";
 
 const startTime = getStartTime();
 
