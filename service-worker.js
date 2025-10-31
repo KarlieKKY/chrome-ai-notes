@@ -2,6 +2,35 @@ let currentUrl = null;
 let currentTabId = null;
 let timer = null;
 
+// Helper function to summarize content
+async function summarizeContent(text) {
+  try {
+    const availability = await Summarizer.availability();
+    // Proceed to request batch or streaming summarization
+    const summarizer = await Summarizer.create({
+      monitor(m) {
+        m.addEventListener("downloadprogress", (e) => {
+          console.log(`Downloaded ${e.loaded * 100}%`);
+        });
+      },
+    });
+    if (availability === "unavailable") {
+      // The Summarizer API isn't usable.
+      return;
+    }
+
+    const summary = await summarizer.summarize(text);
+
+    console.log("Summary result:", summary);
+    summarizer.destroy();
+
+    return summary;
+  } catch (error) {
+    console.error("Error during summarization:", error);
+    return null;
+  }
+}
+
 // Helper function to extract website info for LLM processing
 async function extractContentForLLM(tabId) {
   try {
@@ -133,6 +162,18 @@ function resetTimer(url, tabId) {
     timer = setTimeout(async () => {
       const pageData = await extractContentForLLM(tabId);
       if (pageData) {
+        const stringifyObj = JSON.stringify(pageData);
+        const summary = await summarizeContent(stringifyObj);
+
+        // Add summary to page data
+        pageData.ai_summary = summary || "";
+
+        if (summary) {
+          console.log("Summary generated successfully");
+        } else {
+          console.log("Summary generation failed or not available");
+        }
+
         addToList(pageData);
       } else {
         console.log("Failed to extract page data, skipping...");
@@ -151,6 +192,7 @@ function addToList(pageData) {
       console.log("Page data saved to storage.", pageData);
       console.log("Added to list:", pageData.url);
       console.log("Page title:", pageData.title);
+      console.log("AI Summary:", pageData.ai_summary);
     });
   });
 }
