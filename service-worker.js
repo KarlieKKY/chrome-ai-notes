@@ -6,24 +6,16 @@ let timer = null;
 async function summarizeContent(text) {
   try {
     const availability = await Summarizer.availability();
-    // Proceed to request batch or streaming summarization
-    const summarizer = await Summarizer.create({
-      monitor(m) {
-        m.addEventListener("downloadprogress", (e) => {
-          console.log(`Downloaded ${e.loaded * 100}%`);
-        });
-      },
+    const tldr_medium_summarizer = await Summarizer.create({
+      sharedContext: "This is the content of a website",
+      type: "tldr",
+      length: "medium",
     });
     if (availability === "unavailable") {
       // The Summarizer API isn't usable.
       return;
     }
-
-    const summary = await summarizer.summarize(text);
-
-    console.log("Summary result:", summary);
-    summarizer.destroy();
-
+    const summary = await tldr_medium_summarizer.summarize(text);
     return summary;
   } catch (error) {
     console.error("Error during summarization:", error);
@@ -143,16 +135,16 @@ function resetTimer(url, tabId) {
     timer = null;
   }
 
-  //   // Don't start timer for chrome://, edge://, about: URLs
-  //   if (
-  //     !url ||
-  //     url.startsWith("chrome://") ||
-  //     url.startsWith("edge://") ||
-  //     url.startsWith("about:") ||
-  //     url.startsWith("chrome-extension://")
-  //   ) {
-  //     return;
-  //   }
+  // Don't start timer for chrome://, edge://, about: URLs
+  if (
+    !url ||
+    url.startsWith("chrome://") ||
+    // url.startsWith("edge://") ||
+    // url.startsWith("about:") ||
+    url.startsWith("chrome-extension://")
+  ) {
+    return;
+  }
 
   // Store current tab ID
   currentTabId = tabId;
@@ -167,12 +159,6 @@ function resetTimer(url, tabId) {
 
         // Add summary to page data
         pageData.ai_summary = summary || "";
-
-        if (summary) {
-          console.log("Summary generated successfully");
-        } else {
-          console.log("Summary generation failed or not available");
-        }
 
         addToList(pageData);
       } else {
