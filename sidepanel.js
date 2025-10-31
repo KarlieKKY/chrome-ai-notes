@@ -1,52 +1,10 @@
 import getStartTime from "./utils/utils.js";
 
-// const availability = await Summarizer.availability();
-// console.log("Summarizer availability:", availability);
-// const summarizer = await Summarizer.create({
-//   monitor(m) {
-//     m.addEventListener("downloadprogress", (e) => {
-//       console.log(`Downloaded ${e.loaded * 100}%`);
-//     });
-//   },
-// });
-
-// // Get all tab groups
-// chrome.tabGroups.query({}, function (groups) {
-//   groups.forEach((group) => {
-//     console.log(`Group: ${group.title}, Color: ${group.color}`);
-
-//     // Get tabs in this group
-//     chrome.tabs.query({ groupId: group.id }, function (tabs) {
-//       console.log(`Tabs in ${group.title}:`, tabs);
-//     });
-//   });
-// });
-
-// // Get ungrouped tabs
-// chrome.tabs.query(
-//   { groupId: chrome.tabGroups.TAB_GROUP_ID_NONE },
-//   function (tabs) {
-//     console.log("Ungrouped tabs:", tabs);
-//   }
-// );
-
 const startTime = getStartTime();
-
-// chrome.history.search(
-//   { text: "", startTime: startTime, endTime: Date.now(), maxResults: 10000 },
-//   (results) => {
-//     console.log(`Found ${results.length} visits since 3 AM yesterday`);
-
-//     results.forEach((page) => {
-//       const visitDate = new Date(page.lastVisitTime);
-//       console.log(`${visitDate.toLocaleTimeString()}: ${page.title}`);
-//     });
-//   }
-// );
 
 let currentTab = null;
 let timer = null;
-let urlList = [];
+let urlList = JSON.parse(localStorage.getItem("urlList") || "[]");
 
 function resetTimer(url) {
   clearTimer();
@@ -63,7 +21,7 @@ function clearTimer() {
 }
 
 function updateURL() {
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+  chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
     if (tabs.length > 0) {
       currentTab = tabs[0];
       console.log("Current tab:", currentTab);
@@ -77,27 +35,35 @@ function updateURL() {
   });
 }
 
-function addToList(url) {
-  urlList.push(url);
-  console.log("Added to list:", url);
-  console.log("Current list:", urlList);
-
-  updateList();
-}
-
-function updateList() {
-  const listElement = document.getElementById("list");
-  listElement.innerHTML = "";
-
-  urlList.forEach((url, index) => {
-    const item = document.createElement("div");
-    item.textContent = `${index + 1}. ${url}`;
-    item.style.marginBottom = "8px";
-    listElement.appendChild(item);
+function loadList() {
+  chrome.storage.local.get(["urlList"], (result) => {
+    urlList = result.urlList || [];
+    updateListDisplay();
   });
 }
 
+function updateListDisplay() {
+  const listElement = document.getElementById("list");
+  listElement.innerHTML = "";
+
+  urlList.forEach((item, index) => {
+    const div = document.createElement("div");
+    div.textContent = `${index + 1}. ${item.url}`;
+    div.style.marginBottom = "8px";
+    listElement.appendChild(div);
+  });
+}
+
+// Listen for storage changes to update the list in real-time
+chrome.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace === "local" && changes.urlList) {
+    urlList = changes.urlList.newValue || [];
+    updateListDisplay();
+  }
+});
+
 updateURL();
+loadList();
 
 chrome.tabs.onActivated.addListener(() => {
   updateURL();
@@ -105,7 +71,7 @@ chrome.tabs.onActivated.addListener(() => {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.url) {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
       if (tabs.length > 0 && tabs[0].id === tabId) {
         updateURL();
       }
