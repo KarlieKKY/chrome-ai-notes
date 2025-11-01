@@ -32,7 +32,14 @@ async function summarizeContent(text) {
       topK: params.defaultTopK,
     });
 
-    const summary = await tldr_medium_summarizer.summarize(text);
+    const totalInputQuota = tldr_medium_summarizer.inputQuota;
+    const inputUsage = await tldr_medium_summarizer.measureInputUsage(text);
+    const blowUpRatiol = Math.max(1, inputUsage / totalInputQuota);
+    const reduceRatio = 1 / Math.ceil(blowUpRatiol);
+    const contextCharacterCount = text.length * reduceRatio;
+    const adjustedText = text.slice(0, contextCharacterCount);
+
+    const summary = await tldr_medium_summarizer.summarize(adjustedText);
     const prompt = await languageModelSession.prompt([
       {
         role: "user",
