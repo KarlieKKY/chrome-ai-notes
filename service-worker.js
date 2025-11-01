@@ -63,6 +63,7 @@ async function summarizeContent(text) {
     console.log(jsonCategories);
 
     const summary = await tldr_medium_summarizer.summarize(adjustedText);
+    console.log("Summary generated:", summary);
     const prompt = await languageModelSession.prompt([
       {
         role: "user",
@@ -255,25 +256,6 @@ async function saveCurrentPageActiveTime() {
   if (pageData[todayDate][currentUrl]) {
     pageData[todayDate][currentUrl].totalDuration += additionalTime;
 
-    if (
-      !pageData[todayDate][currentUrl].summaryMedium ||
-      !pageData[todayDate][currentUrl].category
-    ) {
-      const pageDataExtracted = await extractContentForLLM(currentTabId);
-      if (pageDataExtracted) {
-        const stringifyObj = JSON.stringify(pageDataExtracted);
-        const summarizeResult = await summarizeContent(stringifyObj);
-
-        if (summarizeResult) {
-          pageData[todayDate][currentUrl].summaryMedium =
-            summarizeResult.summary;
-          pageData[todayDate][currentUrl].category =
-            summarizeResult.category.toLowerCase();
-        }
-      }
-    }
-
-    console.log("check for result ", pageData);
     await chrome.storage.local.set({ pageData: pageData });
     lastSavedActiveTime = totalActiveTime;
     console.log(
@@ -283,7 +265,7 @@ async function saveCurrentPageActiveTime() {
 }
 
 // Function to reset the timer and start summarization process
-function resetTimerForSummary(url, tabId) {
+async function resetTimerForSummary(url, tabId) {
   // Save previous page's active time before resetting
   if (currentUrl && currentTabId) {
     saveCurrentPageActiveTime();
@@ -322,12 +304,12 @@ function resetTimerForSummary(url, tabId) {
 
   // Check if entry already exists
   const todayDate = getTodayDate();
-  const result = chrome.storage.local.get(["pageData"]);
+  const result = await chrome.storage.local.get(["pageData"]);
   let pageData = result.pageData || {};
 
   // Initiate the record for this page doesn't exist yet
   if (!pageData[todayDate] || !pageData[todayDate][url]) {
-    initUrlSession(url);
+    await initUrlSession(url);
   }
 
   // Start new 3-second timer - ONLY create entry if it doesn't exist
@@ -340,9 +322,8 @@ function resetTimerForSummary(url, tabId) {
 
       // Check if summary/category already exist, if not, proceed to extract & summarize
       if (
-        !pageData[todayDate] ||
-        !pageData[todayDate][url]?.summaryMedium ||
-        !pageData[todayDate][url]?.category
+        !pageData[todayDate]?.[url]?.summaryMedium ||
+        !pageData[todayDate]?.[url]?.category
       ) {
         const pageDataExtracted = await extractContentForLLM(tabId);
         if (pageDataExtracted) {
@@ -358,9 +339,6 @@ function resetTimerForSummary(url, tabId) {
               summarizeResult.summary,
               summarizeResult.category
             );
-            console.log(
-              `✅ Summarization and categorization completed for ${pageDataExtracted.url}`
-            );
           }
         } else {
           console.log("Failed to extract page data, skipping...");
@@ -372,13 +350,13 @@ function resetTimerForSummary(url, tabId) {
   }
 }
 
-function initUrlSession(url) {
+async function initUrlSession(url) {
   try {
     const todayDate = getTodayDate();
     const createdAt = Date.now() / 1000;
 
     // Get existing data from storage
-    const result = chrome.storage.local.get(["pageData"]);
+    const result = await chrome.storage.local.get(["pageData"]);
     let pageData = result.pageData || {};
 
     // Initialize today's date if it doesn't exist
@@ -389,22 +367,24 @@ function initUrlSession(url) {
     // Check if page already exists for today
     if (pageData[todayDate][url]) {
       console.log(
-        `📊 Updated existing page. Total duration now: ${pageData[todayDate][url].totalDuration}s`
+        `Page ${url.slice(
+          0,
+          10
+        )}... already exists for today, skipping creation.`
       );
-    } else {
-      // New page - create fresh entry
-      const pageInfo = {
-        createdAt: createdAt,
-        totalDuration: 0,
-      };
-      pageData[todayDate][url] = pageInfo;
-      console.log(`📊 Created new page entry`);
+      return;
     }
 
-    // Save back to storage
-    chrome.storage.local.set({ pageData: pageData });
+    // New page - create fresh entry
+    const pageInfo = {
+      createdAt: createdAt,
+      totalDuration: 0,
+    };
+    pageData[todayDate][url] = pageInfo;
 
-    console.log("📊 Page data saved to storage:", pageData);
+    // Save back to storage
+    await chrome.storage.local.set({ pageData: pageData });
+    console.log(`📊 Created new page entry for ${url.slice(0, 30)}`);
   } catch (error) {
     console.error("Error saving page data:", error);
   }
@@ -422,7 +402,6 @@ async function updateSummaryCategory(url, summary, category) {
       throw new Error("Page info not found for URL: " + url);
     } else {
       // Update existing page info
-      console.log(pageInfo);
       pageInfo.summaryMedium = summary;
       pageInfo.category = category.toLowerCase().replace("/", "");
       // Save the updated data back to storage
