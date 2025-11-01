@@ -1,6 +1,7 @@
 let currentUrl = null;
 let currentTabId = null;
 let timer = null;
+let pageStartTime = null; // Track when user started viewing the page
 
 // Helper function to summarize content
 async function summarizeContent(text) {
@@ -50,6 +51,15 @@ async function summarizeContent(text) {
     console.error("Error during summarization:", error);
     return null;
   }
+}
+
+// Helper function to get today's date in D/M/YYYY format (no leading zeros)
+function getTodayDate() {
+  const today = new Date();
+  const day = today.getDate(); // No padding
+  const month = today.getMonth() + 1; // No padding
+  const year = today.getFullYear();
+  return `${day}/${month}/${year}`;
 }
 
 // Helper function to extract website info for LLM processing
@@ -175,6 +185,9 @@ function resetTimer(url, tabId) {
     return;
   }
 
+  // Record the start time when user lands on a new page
+  pageStartTime = Date.now();
+
   // Store current tab ID
   currentTabId = tabId;
 
@@ -183,13 +196,23 @@ function resetTimer(url, tabId) {
     timer = setTimeout(async () => {
       const pageData = await extractContentForLLM(tabId);
       if (pageData) {
+        // Calculate time spent on page (in seconds)
+        const timeSpent = pageStartTime
+          ? (Date.now() - pageStartTime) / 1000
+          : 0;
+
         const stringifyObj = JSON.stringify(pageData);
         const result = await summarizeContent(stringifyObj);
 
-        // Add summary to page data
-        pageData.ai_summary = result.summary || "";
-        pageData.ai_tag_category = result.category || "";
-        addToList(pageData);
+        if (result) {
+          // Use the new addToList function with the new data structure
+          await addToList(
+            pageData.url,
+            timeSpent,
+            result.summary,
+            result.category
+          );
+        }
       } else {
         console.log("Failed to extract page data, skipping...");
       }
@@ -197,20 +220,52 @@ function resetTimer(url, tabId) {
   }
 }
 
-// Function to add extracted data to list
-function addToList(pageData) {
-  chrome.storage.local.get(["urlList"], (result) => {
-    let urlList = result.urlList || [];
-    urlList.push(pageData);
+// Updated function to add extracted data to list with new structure
+async function addToList(url, totalDuration, summary, category) {
+  try {
+    const todayDate = getTodayDate();
+    const createdAt = Date.now() / 1000; // Current timestamp in seconds
 
-    chrome.storage.local.set({ urlList: urlList }, () => {
-      console.log("Page data saved to storage.", pageData);
-      console.log("Added to list:", pageData.url);
-      console.log("Page title:", pageData.title);
-      console.log("AI Summary:", pageData.ai_summary);
-      console.log("AI Category:", pageData.ai_tag_category);
-    });
-  });
+    // Create page data object
+    const pageInfo = {
+      createdAt: createdAt,
+      totalDuration: Math.round(totalDuration), // Round to nearest second
+      category: category.toLowerCase().replace("/", ""),
+      summaryMedium: summary,
+    };
+
+    // Get existing data from storage
+    const result = await chrome.storage.local.get(["pageData"]);
+    let pageData = result.pageData || {};
+
+    // Initialize today's date if it doesn't exist
+    if (!pageData[todayDate]) {
+      pageData[todayDate] = {};
+    }
+
+    // Add the new page data under today's date
+    pageData[todayDate][url] = pageInfo;
+
+    // Save back to storage
+    await chrome.storage.local.set({ pageData: pageData });
+
+    console.log("Page data saved to storage:", pageData);
+  } catch (error) {
+    console.error("Error saving page data:", error);
+  }
+}
+
+// Function to retrieve page data for a specific date
+async function getPageDataByDate(date) {
+  const result = await chrome.storage.local.get(["pageData"]);
+  const pageData = result.pageData || {};
+  return pageData[date] || {};
+}
+
+// Function to retrieve all page data
+async function getAllPageData() {
+  const result = await chrome.storage.local.get(["pageData"]);
+  return result.pageData || {};
 }
 
 // Listen for tab activation (when user switches tabs)
