@@ -9,6 +9,8 @@ let sessionStartTimestamp = null;
 let isActive = false;
 let lastSavedActiveTime = 0;
 
+const summaryDelay = 3000;
+
 // Helper function to summarize content
 async function summarizeContent(text) {
   try {
@@ -38,6 +40,11 @@ async function summarizeContent(text) {
     const reduceRatio = 1 / Math.ceil(blowUpRatiol);
     const contextCharacterCount = text.length * reduceRatio;
     const adjustedText = text.slice(0, contextCharacterCount);
+
+    const newInputUsage = await tldr_medium_summarizer.measureInputUsage(
+      adjustedText
+    );
+    console.log(`Input token count: ${newInputUsage}/${totalInputQuota}`);
 
     const summary = await tldr_medium_summarizer.summarize(adjustedText);
     const prompt = await languageModelSession.prompt([
@@ -243,17 +250,20 @@ async function saveCurrentPageActiveTime() {
   }
 }
 
-// Function to reset the timer
-function resetTimer(url, tabId) {
+// Function to reset the timer and start summarization process
+function resetTimerForSummary(url, tabId) {
+  // Save previous page's active time before resetting
   if (currentUrl && currentTabId) {
     saveCurrentPageActiveTime();
   }
 
+  // Reset active time tracking for new page
   currentSessionActiveTime = 0;
   sessionStartTimestamp = null;
   isActive = false;
   lastSavedActiveTime = 0;
 
+  // Clear existing timer
   if (timer) {
     clearTimeout(timer);
     timer = null;
@@ -274,38 +284,58 @@ function resetTimer(url, tabId) {
   pageStartTime = Date.now();
   currentTabId = tabId;
   currentUrl = url;
+
+  // Start tracking active state for this tab
   updateActiveState(tabId);
 
+  // Start new 3-second timer - ONLY create entry if it doesn't exist
   if (url && tabId) {
-    timer = setTimeout(async () => {
-      const pageData = await extractContentForLLM(tabId);
-      if (pageData) {
-        let totalActiveTime = currentSessionActiveTime;
-        if (isActive && sessionStartTimestamp) {
-          totalActiveTime += Date.now() - sessionStartTimestamp;
-        }
-        const activeTimeSeconds = Math.round(totalActiveTime / 1000);
+    setTimeout(async () => {
+      // Check if entry already exists
+      const todayDate = getTodayDate();
+      const result = await chrome.storage.local.get(["pageData"]);
+      let pageData = result.pageData || {};
 
-        const stringifyObj = JSON.stringify(pageData);
-        const result = await summarizeContent(stringifyObj);
+      // Only extract and summarize if this page doesn't exist yet
+      console.log(!pageData[todayDate], !pageData[todayDate][url]);
+      if (!pageData[todayDate] || !pageData[todayDate][url]) {
+        await initUrlSession(url);
+        const pageDataExtracted = await extractContentForLLM(tabId);
 
-        if (result) {
-          await addToList(
-            pageData.url,
-            activeTimeSeconds,
-            result.summary,
-            result.category
-          );
-          lastSavedActiveTime = totalActiveTime;
+        if (pageDataExtracted) {
+          // Get active time accumulated so far
+          let totalActiveTime = currentSessionActiveTime;
+          if (isActive && sessionStartTimestamp) {
+            totalActiveTime += Date.now() - sessionStartTimestamp;
+          }
+          const activeTimeSeconds = Math.round(totalActiveTime / 1000);
+
+          const stringifyObj = JSON.stringify(pageDataExtracted);
+          const summarizeResult = await summarizeContent(stringifyObj);
+
+          if (summarizeResult) {
+            await updateSummaryCategory(
+              pageDataExtracted.url,
+              summarizeResult.summary,
+              summarizeResult.category
+            );
+            // IMPORTANT: Mark this time as already saved
+            lastSavedActiveTime = totalActiveTime;
+            console.log(
+              `✅ Initial entry created with ${activeTimeSeconds}s, marked as saved`
+            );
+          }
+        } else {
+          console.log("Failed to extract page data, skipping...");
         }
       } else {
-        console.log("Failed to extract page data, skipping...");
+        console.log("📊 Page entry already exists, skipping summarization");
       }
-    }, 3000);
+    }, summaryDelay);
   }
 }
 
-async function addToList(url, totalActiveTime, summary, category) {
+async function initUrlSession(url) {
   try {
     const todayDate = getTodayDate();
     const createdAt = Date.now() / 1000;
@@ -321,8 +351,6 @@ async function addToList(url, totalActiveTime, summary, category) {
 
     // Check if page already exists for today
     if (pageData[todayDate][url]) {
-      // Page exists - just update the totalDuration (add to existing time)
-      pageData[todayDate][url].totalDuration += totalActiveTime;
       console.log(
         `📊 Updated existing page. Total duration now: ${pageData[todayDate][url].totalDuration}s`
       );
@@ -330,12 +358,10 @@ async function addToList(url, totalActiveTime, summary, category) {
       // New page - create fresh entry
       const pageInfo = {
         createdAt: createdAt,
-        totalDuration: totalActiveTime,
-        category: category.toLowerCase().replace("/", ""),
-        summaryMedium: summary,
+        totalDuration: 0,
       };
       pageData[todayDate][url] = pageInfo;
-      console.log(`📊 Created new page entry with ${totalActiveTime}s`);
+      console.log(`📊 Created new page entry`);
     }
 
     // Save back to storage
@@ -344,6 +370,26 @@ async function addToList(url, totalActiveTime, summary, category) {
     console.log("📊 Page data saved to storage:", pageData);
   } catch (error) {
     console.error("Error saving page data:", error);
+  }
+}
+
+async function updateSummaryCategory(url, summary, category) {
+  try {
+    const todayDate = getTodayDate();
+    // Get existing data from storage
+    const result = await chrome.storage.local.get(["pageData"]);
+    const pageData = result.pageData || null;
+    const pageInfo = pageData ? pageData[todayDate][url] : null;
+
+    if (!pageInfo) {
+      throw new Error("Page info not found for URL: " + url);
+    } else {
+      // Update existing page info
+      pageInfo.summaryMedium = summary;
+      pageInfo.category = category.toLowerCase().replace("/", "");
+    }
+  } catch (error) {
+    console.error("Error updating page data:", error);
   }
 }
 
@@ -369,7 +415,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 
   chrome.tabs.get(activeInfo.tabId, (tab) => {
     if (tab.url) {
-      resetTimer(tab.url, activeInfo.tabId);
+      resetTimerForSummary(tab.url, activeInfo.tabId);
     }
   });
 });
@@ -380,7 +426,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     // Check if this is the active tab
     chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
       if (tabs.length > 0 && tabs[0].id === tabId) {
-        resetTimer(changeInfo.url, tabId);
+        resetTimerForSummary(changeInfo.url, tabId);
       }
     });
   }
@@ -401,7 +447,7 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
   if (windowId !== chrome.windows.WINDOW_ID_NONE) {
     chrome.tabs.query({ active: true, windowId: windowId }, (tabs) => {
       if (tabs.length > 0 && tabs[0].url) {
-        resetTimer(tabs[0].url, tabs[0].id);
+        resetTimerForSummary(tabs[0].url, tabs[0].id);
       }
     });
   }
@@ -418,7 +464,7 @@ setInterval(() => {
 chrome.runtime.onStartup.addListener(() => {
   chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
     if (tabs.length > 0 && tabs[0].url) {
-      resetTimer(tabs[0].url, tabs[0].id);
+      resetTimerForSummary(tabs[0].url, tabs[0].id);
     }
   });
 });
@@ -427,7 +473,7 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.runtime.onInstalled.addListener(() => {
   chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
     if (tabs.length > 0 && tabs[0].url) {
-      resetTimer(tabs[0].url, tabs[0].id);
+      resetTimerForSummary(tabs[0].url, tabs[0].id);
     }
   });
 });
