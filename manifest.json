@@ -9,7 +9,8 @@
   "action": {
     "default_title": "Click to open panel"
   },
-  "permissions": ["sidePanel", "tabs", "tabGroups"],
+  "permissions": ["sidePanel", "storage", "history", "tabs", "scripting"],
+  "host_permissions": ["<all_urls>"],
   "side_panel": {
     "default_path": "sidepanel.html"
   }

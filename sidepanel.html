@@ -1,11 +1,24 @@
 <!DOCTYPE html>
 <html>
   <head>
+    <meta charset="UTF-8" />
     <title>My Sidepanel</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        font-family: system-ui, -apple-system, sans-serif;
+        font-size: 14px;
+        word-break: break-all;
+      }
+    </style>
   </head>
   <body>
     <h1>All sites sidepanel extension</h1>
     <p>This side panel is enabled on all sites</p>
-    <script src="sidepanel.js"></script>
+    <div id="url"></div>
+    <hr style="margin: 16px 0" />
+    <div id="list"></div>
+    <script type="module" src="sidepanel.js"></script>
   </body>
 </html>
