@@ -1,7 +1,12 @@
 let currentUrl = null;
 let currentTabId = null;
 let timer = null;
-let pageStartTime = null; // Track when user started viewing the page
+let pageStartTime = null;
+
+// Active time tracking variables
+let activeTime = 0;
+let lastActiveTimestamp = null;
+let isActive = false;
 
 // Helper function to summarize content
 async function summarizeContent(text) {
@@ -53,11 +58,10 @@ async function summarizeContent(text) {
   }
 }
 
-// Helper function to get today's date in D/M/YYYY format (no leading zeros)
 function getTodayDate() {
   const today = new Date();
-  const day = today.getDate(); // No padding
-  const month = today.getMonth() + 1; // No padding
+  const day = today.getDate();
+  const month = today.getMonth() + 1;
   const year = today.getFullYear();
   return `${day}/${month}/${year}`;
 }
@@ -166,15 +170,81 @@ async function extractContentForLLM(tabId) {
   }
 }
 
+function updateActiveState(tabId) {
+  if (tabId !== currentTabId) return;
+
+  chrome.tabs.get(tabId, (tab) => {
+    if (!tab) return;
+
+    chrome.windows.get(tab.windowId, (window) => {
+      const newIsActive = tab.active && window.focused;
+
+      if (newIsActive && !isActive) {
+        // Became active
+        lastActiveTimestamp = Date.now();
+        isActive = true;
+        console.log("✅ Tab became active");
+      } else if (!newIsActive && isActive) {
+        if (lastActiveTimestamp) {
+          const sessionTime = Date.now() - lastActiveTimestamp;
+          activeTime += sessionTime;
+          console.log(
+            `Session time: ${sessionTime}ms, Total active: ${activeTime}ms`
+          );
+        }
+        isActive = false;
+        lastActiveTimestamp = null;
+      }
+    });
+  });
+}
+
+// Helper to save current page's active time to storage
+async function saveCurrentPageActiveTime() {
+  if (!currentUrl || activeTime === 0) return;
+
+  let finalActiveTime = activeTime;
+  if (isActive && lastActiveTimestamp) {
+    finalActiveTime += Date.now() - lastActiveTimestamp;
+  }
+
+  const todayDate = getTodayDate();
+  const result = await chrome.storage.local.get(["pageData"]);
+  let pageData = result.pageData || {};
+
+  if (!pageData[todayDate]) {
+    pageData[todayDate] = {};
+  }
+
+  // If page exists, update its totalDuration
+  if (pageData[todayDate][currentUrl]) {
+    const additionalTime = Math.round(finalActiveTime / 1000);
+    pageData[todayDate][currentUrl].totalDuration += additionalTime;
+    await chrome.storage.local.set({ pageData: pageData });
+    console.log(
+      `💾 Updated active time for ${currentUrl}: +${additionalTime}s`
+    );
+  }
+}
+
 // Function to reset the timer
 function resetTimer(url, tabId) {
+  // Save previous page's active time before resetting
+  if (currentUrl && currentTabId && activeTime > 0) {
+    saveCurrentPageActiveTime();
+  }
+
+  // Reset active time tracking for new page
+  activeTime = 0;
+  lastActiveTimestamp = null;
+  isActive = false;
+
   // Clear existing timer
   if (timer) {
     clearTimeout(timer);
     timer = null;
   }
 
-  // Don't start timer for chrome://, edge://, about: URLs
   if (
     !url ||
     url.startsWith("chrome://") ||
@@ -182,30 +252,37 @@ function resetTimer(url, tabId) {
     // url.startsWith("about:") ||
     url.startsWith("chrome-extension://")
   ) {
+    currentUrl = url;
+    currentTabId = tabId;
     return;
   }
 
   // Record the start time when user lands on a new page
   pageStartTime = Date.now();
 
-  // Store current tab ID
+  // Store current tab ID and URL
   currentTabId = tabId;
+  currentUrl = url;
+
+  // Start tracking active state for this tab
+  updateActiveState(tabId);
 
   // Start new 3-second timer
   if (url && tabId) {
     timer = setTimeout(async () => {
       const pageData = await extractContentForLLM(tabId);
       if (pageData) {
-        // Calculate time spent on page (in seconds)
-        const timeSpent = pageStartTime
-          ? (Date.now() - pageStartTime) / 1000
-          : 0;
+        // Get final active time
+        let finalActiveTime = activeTime;
+        if (isActive && lastActiveTimestamp) {
+          finalActiveTime += Date.now() - lastActiveTimestamp;
+        }
+        const timeSpent = finalActiveTime / 1000; // Convert to seconds
 
         const stringifyObj = JSON.stringify(pageData);
         const result = await summarizeContent(stringifyObj);
 
         if (result) {
-          // Use the new addToList function with the new data structure
           await addToList(
             pageData.url,
             timeSpent,
@@ -249,7 +326,7 @@ async function addToList(url, totalDuration, summary, category) {
     // Save back to storage
     await chrome.storage.local.set({ pageData: pageData });
 
-    console.log("Page data saved to storage:", pageData);
+    console.log("📊 Page data saved to storage:", pageData);
   } catch (error) {
     console.error("Error saving page data:", error);
   }
@@ -270,6 +347,11 @@ async function getAllPageData() {
 
 // Listen for tab activation (when user switches tabs)
 chrome.tabs.onActivated.addListener((activeInfo) => {
+  // Save previous page's time
+  if (currentUrl && currentTabId && activeTime > 0) {
+    saveCurrentPageActiveTime();
+  }
+
   chrome.tabs.get(activeInfo.tabId, (tab) => {
     if (tab.url) {
       currentUrl = tab.url;
@@ -289,10 +371,20 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       }
     });
   }
+
+  // Also track when tab becomes active/inactive
+  if (changeInfo.status === "complete" && tabId === currentTabId) {
+    updateActiveState(tabId);
+  }
 });
 
 // Listen for window focus changes
 chrome.windows.onFocusChanged.addListener((windowId) => {
+  // Update active state when window focus changes
+  if (currentTabId) {
+    updateActiveState(currentTabId);
+  }
+
   if (windowId !== chrome.windows.WINDOW_ID_NONE) {
     chrome.tabs.query({ active: true, windowId: windowId }, (tabs) => {
       if (tabs.length > 0 && tabs[0].url) {
@@ -302,6 +394,16 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
     });
   }
 });
+
+// Periodic save every 10 seconds to prevent data loss
+setInterval(() => {
+  if (isActive && currentUrl && activeTime > 0) {
+    saveCurrentPageActiveTime();
+    // Reset activeTime after saving to avoid double-counting
+    activeTime = 0;
+    lastActiveTimestamp = Date.now();
+  }
+}, 10000);
 
 // Initialize on startup
 chrome.runtime.onStartup.addListener(() => {
